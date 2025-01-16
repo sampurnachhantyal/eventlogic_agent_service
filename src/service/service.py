@@ -15,6 +15,11 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client as LangsmithClient
+from copilotkit import CopilotKitSDK, LangGraphAgent
+from copilotkit.integrations.fastapi import add_fastapi_endpoint
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 from agents import DEFAULT_AGENT, get_agent, get_all_agent_info
 from core import settings
@@ -53,6 +58,24 @@ def verify_bearer(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Initialize CopilotKit SDK
+    try:
+        logger.info("Initializing CopilotKit integration")
+        sdk = CopilotKitSDK(
+            agents=[
+                LangGraphAgent(
+                    name=agent_info.key,
+                    description=agent_info.description,
+                    agent=get_agent(agent_info.key)
+                ) for agent_info in get_all_agent_info()
+            ]
+        )
+        add_fastapi_endpoint(app, sdk, "/copilotkit_remote")
+        logger.info("CopilotKit endpoint added successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize CopilotKit: {e}")
+        raise e
+
     # Construct agent with Sqlite checkpointer
     # TODO: It's probably dangerous to share the same checkpointer on multiple agents
     async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as saver:
@@ -150,7 +173,7 @@ async def message_generator(
                 chat_message = langchain_to_chat_message(message)
                 chat_message.run_id = str(run_id)
             except Exception as e:
-                logger.error(f"Error parsing message: {e}")
+                logger.info(f"Error parsing message: {e}")
                 yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"
                 continue
             # LangGraph re-sends the input message, which feels weird, so drop it
@@ -255,7 +278,44 @@ def history(input: ChatHistoryInput) -> ChatHistory:
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "copilotkit": "enabled"
+    }
+
+
+# Add CORS middleware after the app creation
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure this based on your needs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add debug routes endpoint
+@router.get("/debug/routes")
+async def debug_routes():
+    """Debug endpoint to list all available routes."""
+    return {
+        "routes": [
+            {
+                "path": route.path,
+                "name": route.name,
+                "methods": list(route.methods) if route.methods else []
+            }
+            for route in app.routes
+        ]
+    }
+
+# Add global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={"message": "An unexpected error occurred.", "detail": str(exc)},
+    )
 
 
 app.include_router(router)

@@ -42,7 +42,8 @@ dependencies = [
     "slack-bolt ~=1.18.1",
     "flask ~=3.0.2",
     "requests ~=2.31.0",
-    "psycopg2-binary ~=2.9.9"
+    "psycopg2-binary ~=2.9.9",
+    "copilotkit >=0.1.0"
 ]
 
 [dependency-groups]
@@ -80,3 +81,6 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.pytest_env]
 OPENAI_API_KEY = "sk-fake-openai-key"
+
+[tool.poetry.dependencies]
+copilotkit = "^0.1.0"  # Use the latest version available
